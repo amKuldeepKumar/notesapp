@@ -1,215 +1,242 @@
-import { useEffect, useState, useRef } from "react";
-import { Amplify } from "aws-amplify";
-import { generateClient } from "aws-amplify/data";
-import { uploadData, getUrl, remove } from "aws-amplify/storage";
+// src/App.jsx
 import {
   Authenticator,
+  Badge,
+  Button,
   Card,
   Flex,
+  Grid,
   Heading,
-  Text,
-  TextField,
-  TextAreaField,
-  Button,
   Image,
+  SelectField,
+  Text,
+  TextAreaField,
+  TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   View,
   useTheme,
-  SelectField,
-  Badge,
-  Grid,
-  ToggleButtonGroup,
-  ToggleButton,
 } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
+import { Amplify } from "aws-amplify";
+import { generateClient } from "aws-amplify/data";
+import { getUrl, remove, uploadData } from "aws-amplify/storage";
+import { useEffect, useRef, useState } from "react";
 import outputs from "../amplify_outputs.json";
 
 Amplify.configure(outputs);
 const client = generateClient();
 
-function App({ signOut, user }) {
-  const [filteredNotes, setFilteredNotes] = useState([]);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [image, setImage] = useState(null);
-  const [status, setStatus] = useState("active");
-  const [currentFilter, setCurrentFilter] = useState("all");
-  const [isLoading, setIsLoading] = useState(false);
-  const fileInputRef = useRef(null);
-  const { tokens } = useTheme();
+// ---------- Helpers ----------
+const formatDate = (dateString) =>
+  new Date(dateString).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
-  useEffect(() => {
-    fetchNotes();
-  }, []);
+const getStatusColor = (status) => {
+  switch (status) {
+    case "active":
+      return "success";
+    case "inactive":
+      return "neutral";
+    default:
+      return "info";
+  }
+};
 
-
-  const fetchNotes = async (filterStatus = null) => {
-    setIsLoading(true);
-    try {
-      let filter = {};
-
-      if (filterStatus && filterStatus !== "all") {
-        filter = {
-          status: {
-            eq: filterStatus,
-          },
-        };
-      }
-
-      const notesData = await client.models.Note.list({
-        filter: Object.keys(filter).length > 0 ? filter : undefined,
-      });
-
-      const notesWithImages = await Promise.all(
-        notesData.data.map(async (note) => {
-          if (note.image) {
-            try {
-              const url = await getUrl({ path: note.image });
-              return { ...note, imageUrl: url.url.toString() };
-            } catch (error) {
-              console.error("Error getting image URL:", error);
-              return note;
-            }
-          }
-          return note;
-        })
-      );
-      setFilteredNotes(notesWithImages);
-    } catch (error) {
-      console.error("Error fetching notes:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleFilterChange = async (filter) => {
-    setCurrentFilter(filter);
-
-    if (filter !== "all") {
-      await fetchNotes(filter);
-    } else {
-      await fetchNotes();
-    }
-  };
-
-  const createNote = async (event) => {
-    event.preventDefault();
-    if (!name || !description) return;
-
-    try {
-      let imagePath = null;
-      if (image) {
-        imagePath = `media/${user.userId}/${image.name}-${Date.now()}`;
-        await uploadData({
-          path: imagePath,
-          data: image,
-          options: {
-            contentType: image.type,
-          },
-        });
-      }
-
-      await client.models.Note.create({
-        name,
-        description,
-        image: imagePath,
-        status: status || "active",
-        createdAt: new Date().toISOString(),
-      });
-
-      setName("");
-      setDescription("");
-      setImage(null);
-      setStatus("active");
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
-
-      if (currentFilter !== "all") {
-        await fetchNotes(currentFilter);
-      } else {
-        await fetchNotes();
-      }
-    } catch (error) {
-      console.error("Error creating note:", error);
-    }
-  };
-
-  const deleteNote = async (noteId, imagePath) => {
-    try {
-      if (imagePath) {
-        await remove({ path: imagePath });
-      }
-      await client.models.Note.delete({ id: noteId });
-
-      if (currentFilter !== "all") {
-        await fetchNotes(currentFilter);
-      } else {
-        await fetchNotes();
-      }
-    } catch (error) {
-      console.error("Error deleting note:", error);
-    }
-  };
-
-  const updateNoteStatus = async (noteId, newStatus) => {
-    try {
-      await client.models.Note.update({
-        id: noteId,
-        status: newStatus,
-      });
-
-      if (currentFilter !== "all") {
-        await fetchNotes(currentFilter);
-      } else {
-        await fetchNotes();
-      }
-    } catch (error) {
-      console.error("Error updating note status:", error);
-    }
-  };
-
-  const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
-  const getStatusColor = (status) => {
-    switch (status) {
-      case "active":
-        return "success";
-      case "inactive":
-        return "neutral";
-      default:
-        return "info";
-    }
-  };
-
-  const getFilteredCount = (status) => {
-    if (status === "all") return filteredNotes.length;
-    return filteredNotes.filter((note) => note.status === status).length;
-  };
-
+// ---------- NoteCard ----------
+function NoteCard({ note, onUpdateStatus, onDelete, tokens }) {
   return (
-    <View padding={tokens.space.large}>
-      <Flex direction="column" gap={tokens.space.large}>
-        <Flex
-          direction="row"
-          justifyContent="space-between"
-          alignItems="center"
-        >
-          <Button variation="primary" onClick={signOut}>
-            Sign out
-          </Button>
+    <Card variation="outlined" height="100%">
+      <Flex direction="column" gap={tokens.space.small} height="100%">
+        <Flex direction="row" justifyContent="space-between">
+          <Heading level={4}>{note.name}</Heading>
+          <Badge size="small" variation={getStatusColor(note.status)}>
+            {note.status}
+          </Badge>
         </Flex>
 
+        <Text>{note.description}</Text>
+
+        {note.createdAt && (
+          <Text
+            fontSize={tokens.fontSizes.small}
+            color={tokens.colors.font.tertiary}
+          >
+            Created: {formatDate(note.createdAt)}
+          </Text>
+        )}
+
+        {note.imageUrl && (
+          <Image
+            src={note.imageUrl}
+            alt={note.name}
+            width="100%"
+            height="150px"
+            objectFit="cover"
+            borderRadius={tokens.radii.medium}
+          />
+        )}
+
+        <Flex direction="row" gap={tokens.space.small} marginTop="auto">
+          <Button
+            onClick={() =>
+              onUpdateStatus(
+                note.id,
+                note?.status === "active" ? "inactive" : "active"
+              )
+            }
+          >
+            Mark {note.status === "active" ? "Inactive" : "Active"}
+          </Button>
+
+          <Button
+            variation="destructive"
+            onClick={() => onDelete(note.id, note.image)}
+            size="small"
+          >
+            Delete
+          </Button>
+        </Flex>
+      </Flex>
+    </Card>
+  );
+}
+
+// ---------- NotesGrid ----------
+function NotesGrid({
+  notes,
+  isLoading,
+  onUpdateStatus,
+  onDelete,
+  tokens,
+  currentFilter,
+}) {
+  return (
+    <View
+      display="flex"
+      border={"1px solid " + tokens.colors.border.secondary}
+      borderRadius={tokens.radii.medium}
+      padding={tokens.space.medium}
+      textAlign="center"
+    >
+      {!isLoading && (
+        <View
+          style={{ overflowX: "auto", overflowY: "hidden", maxWidth: "100%" }}
+        >
+          <Grid
+            templateColumns="repeat(3, 1fr)"
+            gap={tokens.space.medium}
+            marginTop={tokens.space.medium}
+            minWidth="900px"
+          >
+            {notes.map((note) => (
+              <NoteCard
+                key={note.id}
+                note={note}
+                tokens={tokens}
+                onUpdateStatus={onUpdateStatus}
+                onDelete={onDelete}
+              />
+            ))}
+
+            {notes.length === 0 && (
+              <Card gridColumn="1 / -1">
+                <Text color={tokens.colors.font.tertiary} textAlign="center">
+                  {currentFilter === "all"
+                    ? "No notes yet. Create your first note above!"
+                    : `No ${currentFilter} notes found.`}
+                </Text>
+              </Card>
+            )}
+          </Grid>
+        </View>
+      )}
+    </View>
+  );
+}
+
+// ---------- FilterBar ----------
+function FilterBar({ currentFilter, onFilterChange, getFilteredCount }) {
+  return (
+    <ToggleButtonGroup
+      value={currentFilter}
+      onChange={(value) => onFilterChange(value)}
+      isExclusive
+    >
+      {["all", "active", "inactive"].map((filter) => (
+        <ToggleButton key={filter} value={filter}>
+          <Flex gap="0.25rem" alignItems="center">
+            <Text>{filter.charAt(0).toUpperCase() + filter.slice(1)}</Text>
+            <Badge
+              size="small"
+              variation={
+                filter === "active"
+                  ? "success"
+                  : filter === "inactive"
+                    ? "neutral"
+                    : "info"
+              }
+            >
+              {getFilteredCount(filter)}
+            </Badge>
+          </Flex>
+        </ToggleButton>
+      ))}
+    </ToggleButtonGroup>
+  );
+}
+
+// ---------- NoteFormModal ----------
+function NoteFormModal({
+  show,
+  onClose,
+  onSubmit,
+  name,
+  setName,
+  description,
+  setDescription,
+  status,
+  setStatus,
+  image,
+  setImage,
+  fileInputRef,
+  tokens,
+}) {
+  if (!show) return null;
+
+  return (
+    <View
+      backgroundColor="rgba(0,0,0,0.6)"
+      position="fixed"
+      top="0"
+      left="0"
+      right="0"
+      bottom="0"
+      display="flex"
+      justifyContent="center"
+      alignItems="center"
+      zIndex="9999"
+    >
+      <View
+        backgroundColor="white"
+        padding="2rem"
+        borderRadius="0.5rem"
+        minWidth="500px"
+      >
         <Card variation="elevated">
-          <Heading level={2}>Create Note</Heading>
-          <form onSubmit={createNote}>
+          <View display="flex" justifyContent="space-between">
+            <Heading level={2}>Create Note</Heading>
+            <Button variation="primary" onClick={onClose}>
+              X
+            </Button>
+          </View>
+
+          <form onSubmit={onSubmit}>
             <Flex direction="column" gap={tokens.space.medium}>
               <TextField
                 label="Note name"
@@ -256,159 +283,198 @@ function App({ signOut, user }) {
             </Flex>
           </form>
         </Card>
+      </View>
+    </View>
+  );
+}
 
-        <View>
-          <Flex
-            direction="row"
-            justifyContent="space-between"
-            alignItems="center"
-          >
-            <Heading level={2}>Your Notes</Heading>
-            <Text color={tokens.colors.font.tertiary}>
-              {filteredNotes.length} note{filteredNotes.length !== 1 ? "s" : ""}
-              {currentFilter !== "all" && ` (${getFilteredCount("all")} total)`}
-            </Text>
-          </Flex>
+// ---------- Main App ----------
+function App({ signOut, user }) {
+  const { tokens } = useTheme();
 
-          <Flex
-            gap={tokens.space.small}
-            marginBottom={tokens.space.medium}
-            wrap="wrap"
-          >
-            <ToggleButtonGroup
-              value={currentFilter}
-              onChange={(value) => handleFilterChange(value)}
-              isExclusive
-            >
-              <ToggleButton value="all">
-                <Flex gap={tokens.space.xs} alignItems="center">
-                  <Text>All</Text>
-                  <Badge size="small" variation="info">
-                    {getFilteredCount("all")}
-                  </Badge>
-                </Flex>
-              </ToggleButton>
-              <ToggleButton value="active">
-                <Flex gap={tokens.space.xs} alignItems="center">
-                  <Text>Active</Text>
-                  <Badge size="small" variation="success">
-                    {getFilteredCount("active")}
-                  </Badge>
-                </Flex>
-              </ToggleButton>
-              <ToggleButton value="inactive">
-                <Flex gap={tokens.space.xs} alignItems="center">
-                  <Text>Inactive</Text>
-                  <Badge size="small" variation="neutral">
-                    {getFilteredCount("inactive")}
-                  </Badge>
-                </Flex>
-              </ToggleButton>
-            </ToggleButtonGroup>
-          </Flex>
+  const [filteredNotes, setFilteredNotes] = useState([]);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [image, setImage] = useState(null);
+  const [status, setStatus] = useState("active");
+  const [currentFilter, setCurrentFilter] = useState("all");
+  const [isLoading, setIsLoading] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const fileInputRef = useRef(null);
 
-          {isLoading && (
-            <Card>
-              <Text textAlign="center">Loading notes...</Text>
-            </Card>
-          )}
+  useEffect(() => {
+    fetchNotes();
+  }, []);
 
-          {!isLoading && (
-            <Grid
-              templateColumns={{
-                base: "1fr",
-                small: "1fr 1fr",
-                medium: "1fr 1fr 1fr",
-                large: "1fr 1fr 1fr 1fr",
-              }}
-              gap={tokens.space.medium}
-              marginTop={tokens.space.medium}
-            >
-              {filteredNotes.map((note) => (
-                <Card key={note.id} variation="outlined" height="100%">
-                  <Flex
-                    direction="column"
-                    gap={tokens.space.small}
-                    height="100%"
-                  >
-                    <Flex
-                      direction="row"
-                      justifyContent="space-between"
-                      alignItems="flex-start"
-                    >
-                      <Heading level={4}>{note.name}</Heading>
-                      <Badge
-                        size="small"
-                        variation={getStatusColor(note.status)}
-                      >
-                        {note.status}
-                      </Badge>
-                    </Flex>
+  const fetchNotes = async (filterStatus = null) => {
+    setIsLoading(true);
+    try {
+      const filter =
+        filterStatus && filterStatus !== "all"
+          ? { status: { eq: filterStatus } }
+          : undefined;
 
-                    <Text>{note.description}</Text>
+      const notesData = await client.models.Note.list({ filter });
 
-                    {note.createdAt && (
-                      <Text
-                        fontSize={tokens.fontSizes.small}
-                        color={tokens.colors.font.tertiary}
-                      >
-                        Created: {formatDate(note.createdAt)}
-                      </Text>
-                    )}
+      const notesWithImages = await Promise.all(
+        notesData.data.map(async (note) => {
+          if (note.image) {
+            try {
+              const url = await getUrl({ path: note.image });
+              return { ...note, imageUrl: url.url.toString() };
+            } catch {
+              return note;
+            }
+          }
+          return note;
+        })
+      );
 
-                    {note.imageUrl && (
-                      <Image
-                        src={note.imageUrl}
-                        alt={note.name}
-                        width="100%"
-                        height="150px"
-                        objectFit="cover"
-                        borderRadius={tokens.radii.medium}
-                      />
-                    )}
+      setFilteredNotes(notesWithImages);
+    } catch (error) {
+      console.error("Error fetching notes:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-                    <Flex
-                      direction="row"
-                      gap={tokens.space.small}
-                      marginTop="auto"
-                    >
-                      <SelectField
-                        size="small"
-                        value={note.status}
-                        onChange={(e) =>
-                          updateNoteStatus(note.id, e.target.value)
-                        }
-                        label="Change status"
-                        labelHidden
-                      >
-                        <option value="active">Active</option>
-                        <option value="inactive">Inactive</option>
-                      </SelectField>
+  const handleFilterChange = (filter) => {
+    setCurrentFilter(filter);
+    fetchNotes(filter);
+  };
 
-                      <Button
-                        variation="destructive"
-                        onClick={() => deleteNote(note.id, note.image)}
-                        size="small"
-                      >
-                        Delete
-                      </Button>
-                    </Flex>
-                  </Flex>
-                </Card>
-              ))}
+  const createNote = async (event) => {
+    event.preventDefault();
+    if (!name || !description) return;
 
-              {filteredNotes.length === 0 && !isLoading && (
-                <Card gridColumn="1 / -1">
-                  <Text color={tokens.colors.font.tertiary} textAlign="center">
-                    {currentFilter === "all"
-                      ? "No notes yet. Create your first note above!"
-                      : `No ${currentFilter} notes found.`}
-                  </Text>
-                </Card>
-              )}
-            </Grid>
-          )}
-        </View>
+    try {
+      let imagePath = null;
+      if (image) {
+        imagePath = `media/${user.userId}/${image.name}-${Date.now()}`;
+        await uploadData({
+          path: imagePath,
+          data: image,
+          options: { contentType: image.type },
+        });
+      }
+
+      await client.models.Note.create({
+        name,
+        description,
+        image: imagePath,
+        status: status || "active",
+        createdAt: new Date().toISOString(),
+      });
+
+      setName("");
+      setDescription("");
+      setImage(null);
+      setStatus("active");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+
+      await fetchNotes(currentFilter);
+      setShowModal(false);
+    } catch (error) {
+      console.error("Error creating note:", error);
+    }
+  };
+
+  const deleteNote = async (noteId, imagePath) => {
+    try {
+      if (imagePath) await remove({ path: imagePath });
+      await client.models.Note.delete({ id: noteId });
+      await fetchNotes(currentFilter);
+    } catch (error) {
+      console.error("Error deleting note:", error);
+    }
+  };
+
+  const updateNoteStatus = async (noteId, newStatus) => {
+    try {
+      await client.models.Note.update({ id: noteId, status: newStatus });
+      await fetchNotes(currentFilter);
+    } catch (error) {
+      console.error("Error updating note status:", error);
+    }
+  };
+
+  const getFilteredCount = (status) =>
+    status === "all"
+      ? filteredNotes.length
+      : filteredNotes.filter((n) => n.status === status).length;
+
+  return (
+    <View height="100vh">
+      <Flex direction="column" gap={tokens.space.small}>
+        {/* Header */}
+        <Flex direction="row" justifyContent="space-between">
+          <Button variation="primary" onClick={signOut}>
+            Sign out
+          </Button>
+          <Button variation="primary" onClick={() => setShowModal(true)}>
+            Create Note
+          </Button>
+        </Flex>
+
+        {/* Modal */}
+        <NoteFormModal
+          show={showModal}
+          onClose={() => setShowModal(false)}
+          onSubmit={createNote}
+          {...{
+            name,
+            setName,
+            description,
+            setDescription,
+            status,
+            setStatus,
+            image,
+            setImage,
+            fileInputRef,
+            tokens,
+          }}
+        />
+
+        {/* Notes Header */}
+        <Flex
+          direction="row"
+          justifyContent="space-between"
+          alignItems="center"
+        >
+          <Heading level={2}>Your Notes</Heading>
+          <Text color={tokens.colors.font.tertiary}>
+            {filteredNotes.length} note{filteredNotes.length !== 1 ? "s" : ""}
+          </Text>
+        </Flex>
+
+        {/* Filters */}
+        <Flex
+          gap={tokens.space.small}
+          marginBottom={tokens.space.medium}
+          wrap="wrap"
+        >
+          <FilterBar
+            currentFilter={currentFilter}
+            onFilterChange={handleFilterChange}
+            getFilteredCount={getFilteredCount}
+          />
+        </Flex>
+
+        {/* Notes Grid */}
+        {isLoading ? (
+          <Card>
+            <Text textAlign="center">Loading notes...</Text>
+          </Card>
+        ) : (
+          <NotesGrid
+            notes={filteredNotes}
+            isLoading={isLoading}
+            onUpdateStatus={updateNoteStatus}
+            onDelete={deleteNote}
+            tokens={tokens}
+            currentFilter={currentFilter}
+          />
+        )}
       </Flex>
     </View>
   );
